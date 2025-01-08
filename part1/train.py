@@ -8,7 +8,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 
 class DigitSumDataset(Dataset):
-    def __init__(self, data_files_pattern='data*.npy', label_files_pattern='lab*.npy', transform=None):
+    def __init__(self, data_files_pattern='../data/data*.npy', label_files_pattern='../data/lab*.npy', transform=None):
         self.data_files = sorted(glob.glob(data_files_pattern))
         self.label_files = sorted(glob.glob(label_files_pattern))
         self.transform = transform
@@ -64,18 +64,40 @@ class CNNBaseline(nn.Module):
         x = self.fc_layers(x)
         return x
 
+def calculate_accuracy(outputs, labels):
+    # Calculate accuracy using floor
+    floor_pred = torch.floor(outputs.squeeze())
+    floor_accuracy = (floor_pred == labels).float().mean().item()
+    
+    # Calculate accuracy using ceiling
+    ceil_pred = torch.ceil(outputs.squeeze())
+    ceil_accuracy = (ceil_pred == labels).float().mean().item()
+    
+    # Calculate accuracy taking the closest integer
+    round_pred = torch.round(outputs.squeeze())
+    round_accuracy = (round_pred == labels).float().mean().item()
+    
+    # Calculate mean absolute error
+    mae = torch.abs(outputs.squeeze() - labels).mean().item()
+    
+    return {
+        'floor_accuracy': floor_accuracy,
+        'ceil_accuracy': ceil_accuracy,
+        'round_accuracy': round_accuracy,
+        'mae': mae
+    }
+
 def train_model():
-    # Parameters
     batch_size = 64
     learning_rate = 0.001
-    num_epochs = 50
+    num_epochs = 100
 
+    # Data transforms
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5], std=[0.5])
     ])
 
-    # Dataset and train/val split
     full_dataset = DigitSumDataset(transform=transform)
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
@@ -91,13 +113,13 @@ def train_model():
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    # Training loop
     best_val_loss = float('inf')
+    no_improve = 0
     training_losses = []
     validation_losses = []
+    validation_metrics = []
 
     for epoch in range(num_epochs):
-        # Training phase
         model.train()
         running_train_loss = 0.0
         for images, labels in train_loader:
@@ -114,20 +136,36 @@ def train_model():
         train_loss = running_train_loss / len(train_loader)
         training_losses.append(train_loss)
 
-        # Validation phase
         model.eval()
         running_val_loss = 0.0
+        val_predictions = []
+        val_true_labels = []
+        
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device).float(), labels.to(device).float()
                 outputs = model(images)
                 loss = criterion(outputs.squeeze(), labels)
                 running_val_loss += loss.item()
+                
+                val_predictions.extend(outputs.cpu().numpy())
+                val_true_labels.extend(labels.cpu().numpy())
 
         val_loss = running_val_loss / len(val_loader)
         validation_losses.append(val_loss)
 
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        val_predictions = torch.tensor(val_predictions)
+        val_true_labels = torch.tensor(val_true_labels)
+        metrics = calculate_accuracy(val_predictions, val_true_labels)
+        validation_metrics.append(metrics)
+
+        print(f"Epoch [{epoch + 1}/{num_epochs}]")
+        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(f"Floor Accuracy: {metrics['floor_accuracy']:.4f}")
+        print(f"Ceiling Accuracy: {metrics['ceil_accuracy']:.4f}")
+        print(f"Rounded Accuracy: {metrics['round_accuracy']:.4f}")
+        print(f"Mean Absolute Error: {metrics['mae']:.4f}")
+        print("-" * 50)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -138,10 +176,12 @@ def train_model():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_loss': train_loss,
                 'val_loss': val_loss,
+                'metrics': metrics
             }, "best_digit_sum_model.pth")
 
+
     print("Training completed!")
-    return model, training_losses, validation_losses
+    return model, training_losses, validation_losses, validation_metrics
 
 def infer_sum(model, image, transform, device):
     model.eval()
@@ -149,18 +189,39 @@ def infer_sum(model, image, transform, device):
         image = transform(image).unsqueeze(0).to(device).float()
         output = model(image)
         predicted_sum = output.item()
-        return predicted_sum
+        return {
+            'raw_prediction': predicted_sum,
+            'floor_prediction': int(np.floor(predicted_sum)),
+            'ceil_prediction': int(np.ceil(predicted_sum)),
+            'round_prediction': int(np.round(predicted_sum))
+        }
 
 if __name__ == "__main__":
-    model, train_losses, val_losses = train_model()
+    model, train_losses, val_losses, val_metrics = train_model()
     
-    plt.figure(figsize=(10, 6))
+    # Plot training and validation losses
+    plt.figure(figsize=(15, 5))
+    
+    # Loss plot
+    plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Training Loss')
     plt.plot(val_losses, label='Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training and Validation Losses')
     plt.legend()
-    plt.grid(True)
+    
+    # Accuracy plot
+    plt.subplot(1, 2, 2)
+    epochs = range(len(val_metrics))
+    plt.plot(epochs, [m['floor_accuracy'] for m in val_metrics], label='Floor Accuracy')
+    plt.plot(epochs, [m['ceil_accuracy'] for m in val_metrics], label='Ceiling Accuracy')
+    plt.plot(epochs, [m['round_accuracy'] for m in val_metrics], label='Rounded Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Validation Accuracies')
+    plt.legend()
+    
+    plt.tight_layout()
     plt.savefig('training_history.png')
     plt.close()

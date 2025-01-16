@@ -1,0 +1,6 @@
+train: ../../../../scratch/yashas.b/images
+val: ../../../../scratch/yashas.b/images
+
+nc: 1  # Only one class: the digit (0)
+names:
+  0: 'digit'
